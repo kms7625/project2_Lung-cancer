@@ -284,7 +284,7 @@ def parse_args():
     p.add_argument('--img_size',   type=int, default=224)
     p.add_argument('--epochs',     type=int, default=50)
     p.add_argument('--batch',      type=int, default=32)
-    p.add_argument('--lr',         type=float, default=0.01)
+    p.add_argument('--lr',         type=float, default=0.001)
     p.add_argument('--workers',    type=int, default=4)
     p.add_argument('--seed',       type=int, default=42)
     p.add_argument('--no_pretrain', action='store_true')
