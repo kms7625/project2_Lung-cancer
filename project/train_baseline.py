@@ -349,7 +349,7 @@ def full_evaluation(model: nn.Module, test_loader: DataLoader,
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--csv',        default=f'{DATA_ROOT}/labels.csv')
-    p.add_argument('--out_dir',    default=f'{DATA_ROOT}/checkpoints/baseline')
+    p.add_argument('--out_dir',    default=None)
     p.add_argument('--arch',       default='efficientnet_v2_s',
                    choices=['efficientnet_v2_s', 'convnext_tiny', 'resnet18'])
     p.add_argument('--num_classes', type=int, default=2)
@@ -359,6 +359,7 @@ def parse_args():
     p.add_argument('--lr',         type=float, default=0.001)
     p.add_argument('--workers',    type=int, default=4)
     p.add_argument('--seed',       type=int, default=42)
+    p.add_argument('--cbam',       action='store_true', help='CBAM 어텐션 모듈 추가')
     p.add_argument('--no_pretrain', action='store_true')
     return p.parse_args()
 
