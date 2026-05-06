@@ -107,10 +107,79 @@ def get_dataloaders(csv_path: str, batch_size: int = 32,
 
 
 # ──────────────────────────────────────────────
+# CBAM
+# ──────────────────────────────────────────────
+class ChannelAttention(nn.Module):
+    def __init__(self, in_channels: int, reduction: int = 16):
+        super().__init__()
+        mid = max(in_channels // reduction, 1)
+        self.mlp = nn.Sequential(
+            nn.Linear(in_channels, mid, bias=False),
+            nn.ReLU(),
+            nn.Linear(mid, in_channels, bias=False),
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg = x.mean(dim=[2, 3])
+        mx  = x.amax(dim=[2, 3])
+        attn = self.sigmoid(self.mlp(avg) + self.mlp(mx))
+        return x * attn.unsqueeze(-1).unsqueeze(-1)
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size: int = 7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size,
+                              padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg = x.mean(dim=1, keepdim=True)
+        mx  = x.amax(dim=1, keepdim=True)
+        attn = self.sigmoid(self.conv(torch.cat([avg, mx], dim=1)))
+        return x * attn
+
+
+class CBAM(nn.Module):
+    def __init__(self, in_channels: int, reduction: int = 16, kernel_size: int = 7):
+        super().__init__()
+        self.channel = ChannelAttention(in_channels, reduction)
+        self.spatial = SpatialAttention(kernel_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.spatial(self.channel(x))
+
+
+class EfficientNetV2WithCBAM(nn.Module):
+    """EfficientNetV2-S + CBAM (features[6]=256ch, features[7]=1280ch 뒤에 삽입)"""
+    def __init__(self, base: nn.Module, num_classes: int):
+        super().__init__()
+        self.features = base.features
+        self.cbam_256  = CBAM(256)
+        self.cbam_1280 = CBAM(1280)
+        self.avgpool    = base.avgpool
+        self.classifier = base.classifier
+        self.classifier[1] = nn.Linear(
+            self.classifier[1].in_features, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for i, block in enumerate(self.features):
+            x = block(x)
+            if i == 6:
+                x = self.cbam_256(x)
+            elif i == 7:
+                x = self.cbam_1280(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        return self.classifier(x)
+
+
+# ──────────────────────────────────────────────
 # 모델
 # ──────────────────────────────────────────────
 def get_model(arch: str = 'efficientnet_v2_s', num_classes: int = 2,
-              pretrained: bool = True) -> nn.Module:
+              pretrained: bool = True, use_cbam: bool = False) -> nn.Module:
     weights_map = {
         'efficientnet_v2_s': 'IMAGENET1K_V1',
         'convnext_tiny':     'IMAGENET1K_V1',
@@ -119,8 +188,11 @@ def get_model(arch: str = 'efficientnet_v2_s', num_classes: int = 2,
     w = weights_map[arch] if pretrained else None
 
     if arch == 'efficientnet_v2_s':
-        model = models.efficientnet_v2_s(weights=w)
-        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+        base = models.efficientnet_v2_s(weights=w)
+        if use_cbam:
+            return EfficientNetV2WithCBAM(base, num_classes)
+        base.classifier[1] = nn.Linear(base.classifier[1].in_features, num_classes)
+        return base
     elif arch == 'convnext_tiny':
         model = models.convnext_tiny(weights=w)
         model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
