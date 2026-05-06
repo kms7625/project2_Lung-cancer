@@ -71,7 +71,10 @@ class LIDCDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
-        img = np.load(row['image_path']).astype(np.float32)  # (H, W), [0,1]
+        img = np.load(row['image_path']).astype(np.float32)  # (H, W), HU values
+        # HU 윈도잉: 폐 결절 범위 [-1000, 400] → [0, 1]
+        img = np.clip(img, -1000, 400)
+        img = (img + 1000) / 1400
         img_3ch = np.stack([img, img, img], axis=2)           # (H, W, 3)
         img_tensor = self.transform(img_3ch)
         label = torch.tensor(int(row['label']), dtype=torch.long)
