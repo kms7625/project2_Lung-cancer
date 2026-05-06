@@ -367,6 +367,11 @@ def parse_args():
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    # out_dir 자동 결정
+    if args.out_dir is None:
+        suffix = f'{args.arch}{"_cbam" if args.cbam else ""}'
+        args.out_dir = f'{DATA_ROOT}/checkpoints/{suffix}'
     os.makedirs(args.out_dir, exist_ok=True)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -380,9 +385,11 @@ def main():
     print(f"Test : {len(test_loader.dataset)}개 슬라이스")
 
     # 모델
-    model = get_model(args.arch, args.num_classes, pretrained=not args.no_pretrain)
+    model = get_model(args.arch, args.num_classes,
+                      pretrained=not args.no_pretrain, use_cbam=args.cbam)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"모델: {args.arch}  |  파라미터: {n_params:,}")
+    cbam_tag = ' + CBAM' if args.cbam else ''
+    print(f"모델: {args.arch}{cbam_tag}  |  파라미터: {n_params:,}")
 
     # 학습
     model, history = train(
