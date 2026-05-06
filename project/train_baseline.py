@@ -421,7 +421,7 @@ def main():
 
     # 데이터로더
     train_loader, val_loader, test_loader = get_dataloaders(
-        args.csv, args.batch, args.img_size, args.workers)
+        args.csv, args.batch, args.img_size, args.workers, args.crop_size)
     print(f"Train: {len(train_loader.dataset)}개 슬라이스")
     print(f"Val  : {len(val_loader.dataset)}개 슬라이스")
     print(f"Test : {len(test_loader.dataset)}개 슬라이스")
