@@ -431,7 +431,8 @@ def main():
                       pretrained=not args.no_pretrain, use_cbam=args.cbam)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     cbam_tag = ' + CBAM' if args.cbam else ''
-    print(f"모델: {args.arch}{cbam_tag}  |  파라미터: {n_params:,}")
+    crop_tag = f' | ROI 크롭: {args.crop_size}px' if args.crop_size > 0 else ' | ROI 크롭: 없음'
+    print(f"모델: {args.arch}{cbam_tag}  |  파라미터: {n_params:,}{crop_tag}")
 
     # 학습
     model, history = train(
