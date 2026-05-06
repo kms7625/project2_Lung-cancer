@@ -43,6 +43,28 @@ def set_seed(seed: int = 42):
 # ──────────────────────────────────────────────
 # Dataset
 # ──────────────────────────────────────────────
+def _crop_roi(img: np.ndarray, cx: int, cy: int, size: int) -> np.ndarray:
+    """결절 중심(cx=col, cy=row) 기준 size×size 크롭, 경계 초과 시 이동 후 패딩."""
+    H, W = img.shape
+    half = size // 2
+    r1 = max(0, cy - half)
+    r2 = r1 + size
+    if r2 > H:
+        r2 = H
+        r1 = max(0, H - size)
+    c1 = max(0, cx - half)
+    c2 = c1 + size
+    if c2 > W:
+        c2 = W
+        c1 = max(0, W - size)
+    crop = img[r1:r2, c1:c2]
+    ph = size - crop.shape[0]
+    pw = size - crop.shape[1]
+    if ph > 0 or pw > 0:
+        crop = np.pad(crop, ((0, ph), (0, pw)), mode='constant', constant_values=0.0)
+    return crop
+
+
 def _make_transform(split: str, img_size: int):
     if split == 'train':
         return transforms.Compose([
@@ -62,8 +84,11 @@ def _make_transform(split: str, img_size: int):
 
 
 class LIDCDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, split: str, img_size: int = 224):
+    def __init__(self, df: pd.DataFrame, split: str,
+                 img_size: int = 224, crop_size: int = 0):
         self.data = df[df['split'] == split].reset_index(drop=True)
+        self.crop_size = crop_size
+        self.has_centroid = ('cx' in self.data.columns and 'cy' in self.data.columns)
         self.transform = _make_transform(split, img_size)
 
     def __len__(self):
@@ -75,6 +100,20 @@ class LIDCDataset(Dataset):
         # HU 윈도잉: 폐 결절 범위 [-1000, 400] → [0, 1]
         img = np.clip(img, -1000, 400)
         img = (img + 1000) / 1400
+
+        # ROI 크롭
+        if self.crop_size > 0:
+            H, W = img.shape
+            if self.has_centroid:
+                cx = float(row['cx'])
+                cy = float(row['cy'])
+            else:
+                cx, cy = -1.0, -1.0
+            # centroid 없으면 이미지 중심으로 대체
+            if cx < 0 or cy < 0:
+                cx, cy = W / 2.0, H / 2.0
+            img = _crop_roi(img, int(round(cx)), int(round(cy)), self.crop_size)
+
         img_3ch = np.stack([img, img, img], axis=2)           # (H, W, 3)
         img_tensor = self.transform(img_3ch)
         label = torch.tensor(int(row['label']), dtype=torch.long)
