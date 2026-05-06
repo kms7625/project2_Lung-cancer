@@ -121,11 +121,12 @@ class LIDCDataset(Dataset):
 
 
 def get_dataloaders(csv_path: str, batch_size: int = 32,
-                    img_size: int = 224, num_workers: int = 4):
+                    img_size: int = 224, num_workers: int = 4,
+                    crop_size: int = 0):
     df = pd.read_csv(csv_path)
-    train_ds = LIDCDataset(df, 'train', img_size)
-    val_ds   = LIDCDataset(df, 'val',   img_size)
-    test_ds  = LIDCDataset(df, 'test',  img_size)
+    train_ds = LIDCDataset(df, 'train', img_size, crop_size)
+    val_ds   = LIDCDataset(df, 'val',   img_size, crop_size)
+    test_ds  = LIDCDataset(df, 'test',  img_size, crop_size)
 
     # 클래스 불균형 대응 WeightedRandomSampler (비율 1.21:1 이지만 적용)
     labels = train_ds.data['label'].values
