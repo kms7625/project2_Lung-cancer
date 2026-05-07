@@ -295,7 +295,7 @@ def evaluate(model: nn.Module, loader: DataLoader,
 
 
 # ──────────────────────────────────────────────
-# 학습
+# 학습.
 # ──────────────────────────────────────────────
 def train_one_epoch(model: nn.Module, loader: DataLoader,
                     optimizer, criterion, device: torch.device):
