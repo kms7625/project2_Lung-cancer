@@ -28,17 +28,17 @@ DATA_ROOT = '/home/kms/resnet_project/lidc-idri'
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--slices_dir', default=f'{DATA_ROOT}/slices')
-    p.add_argument('--out_csv', default=f'{DATA_ROOT}/labels.csv')
-    p.add_argument('--json_path', default=f'{DATA_ROOT}/nodule_malignancy_scores.json')
-    p.add_argument('--seed', type=int, default=42)
-    p.add_argument('--val_ratio', type=float, default=0.15)
-    p.add_argument('--test_ratio', type=float, default=0.15)
+    p.add_argument('--out_csv',    default=f'{DATA_ROOT}/labels.csv')
+    p.add_argument('--json_path',  default=f'{DATA_ROOT}/nodule_malignancy_scores.json')
+    p.add_argument('--seed',       type=int,   default=42)
+    p.add_argument('--val_ratio',  type=float, default=0.15) # 15%
+    p.add_argument('--test_ratio', type=float, default=0.15) # 15%
     return p.parse_args()
 
 
 def score_to_label(score: int) -> int:
-    # 전략 A: score 1-3 = 양성(0), score 4-5 = 악성(1)
-    return 0 if score <= 3 else 1
+    # 전략 A: score 1-2 = 양성(0), score 4-5 = 악성(1)
+    return 0 if score <= 2 else 1
 
 
 def load_centroids(json_path: str) -> dict:
@@ -101,7 +101,7 @@ def main():
         except (ValueError, IndexError):
             skip_count += 1
             continue
-        if score < 1 or score > 5:
+        if score < 1 or score > 5 or score == 3:
             skip_count += 1
             continue
         label = score_to_label(score)
