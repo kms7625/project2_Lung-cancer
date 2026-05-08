@@ -1,203 +1,246 @@
-# LIDC-IDRI 폐 결절 분류 프로젝트 — 1주차 진행 보고서
+# 폐 결절 악성/양성 분류 프로젝트 진행 현황
 
-**작성일:** 2026-05-06  
-**단계:** 1주차 — 데이터 준비 · 베이스라인 · CBAM · ROI 크롭
+## 프로젝트 개요
 
----
-
-## 1. 전체 진행 요약
-
-| 단계 | 내용 | 상태 |
-|------|------|------|
-| 데이터 탐색 (EDA) | 분포 분석, 라벨링 전략 결정 | 완료 |
-| 전처리 | HU 윈도잉, 환자 단위 CSV 분할 | 완료 |
-| 베이스라인 학습 | EfficientNetV2-S, 50 epoch | 완료 |
-| CBAM 추가 | features[6], features[7] 삽입 | 완료 |
-| ROI 크롭 (center) | 128×128 이미지 중심 크롭 | 완료 |
-| ROI 크롭 (nodule) | nodule_malignancy_scores.json centroid 적용 | **진행 중** |
-| 다음 단계 | Val AUC ≥ 0.93 달성 후 /lidc-experiment | 대기 |
+| 항목 | 내용 |
+|------|------|
+| 목표 | LIDC-IDRI CT 데이터셋 기반 폐 결절 악성/양성 3D 이진 분류 |
+| 데이터 | LIDC-IDRI (1010명 환자, 원본 DICOM) |
+| 분류 기준 | score 1~2 = 양성(0), score 3 = 제외, score 4~5 = 악성(1) |
+| 차별화 | 3D ROI 기반 + 통계적 필터링으로 신뢰도 높은 데이터만 학습 |
+| 서버 | hkitserver.iptime.org:6303 (RTX GPU, Ubuntu 20.04) |
+| 경로 | `/home/kms/resnet_project/lidc-idri/` |
 
 ---
 
-## 2. 데이터 현황
+## 타 팀 성능 비교 (참고용)
 
-### 2.1 슬라이스 데이터
+| 팀 | 모델 | 방식 | Accuracy | AUC |
+|----|------|------|----------|-----|
+| A팀 | ResNet18 + CBAM + MGA | 2D 전체 슬라이스 | 88.91% | 0.9400 |
+| 2팀 | ConvNeXt + CAM-Alignment | 2D Axial 슬라이스 | - | - |
+| C조 | EfficientNetV2(L) + SAM | 2D ROI 크롭 패치 | 96.54% | 0.987 |
+| **우리 팀** | **3D ResNet18** | **3D ROI 큐브(64x64x64)** | **72.22%** | **0.8909** |
+
+> C조가 가장 높은 성능. 우리 팀은 3D 방식으로 완전히 다른 접근.
+
+---
+
+## 데이터셋 구조
+
+```
+/home/kms/resnet_project/lidc-idri/
+├── manifest-1600709154662/     # 원본 DICOM (환자 1010명)
+│   └── LIDC-IDRI/
+│       ├── LIDC-IDRI-0001/
+│       │   └── .../1-001.dcm ~ 1-240.dcm
+│       └── ...
+├── LIDC-XML-only/              # 어노테이션 XML (1318개)
+│   └── tcia-lidc-xml/
+├── slices/                     # 전처리된 2D npy (889명, 5332개)
+├── slices_png/                 # 시각화용 PNG
+├── rois_3d/                    # 3D ROI npy (494개) ← 우리가 생성
+├── nodule_malignancy_scores.json
+├── labels.csv                  # 2D 학습용 CSV
+├── labels_3d.csv               # 3D 학습용 CSV ← 우리가 생성
+└── checkpoints/
+    └── 3d_resnet/
+        ├── best_model_3d.pth
+        ├── history.json
+        └── test_results.json
+```
+
+---
+
+## 1단계: EDA (data_explore.ipynb)
+
+### 확인 내용
+
+| 항목 | 결과 |
+|------|------|
+| slices/ 환자 수 | 889명 |
+| npy 파일 형식 | slice_{번호}_{악성도}.npy |
+| 이미지 shape | (300, 300) |
+| 픽셀값 범위 | -3024 ~ 1403 (HU 단위, 정규화 필요) |
+| 원본 DICOM shape | (512, 512, 133~240) |
+| Spacing | 환자마다 다름 → 리샘플링 필요 |
+| XML 파일 수 | 1318개 |
+
+### 핵심 발견
+- XML의 noduleID는 채점자마다 달라서 ID 기반 매칭 불가
+- 좌표(x, y, z) 기반으로 같은 결절 그룹핑 필요
+- HU 클리핑(-1000 ~ 400) + 정규화(0~1) 필요
+
+---
+
+## 2단계: 필터링 전략 (팀 독자적 차별화 포인트)
+
+### 필터링 조건 3가지
+
+```python
+# 조건 1: 채점자 3명 미만 제외
+if n_readers < 3: exclude
+
+# 조건 2: 점수 표본분산 > 1 제외
+if variance(scores) > 1: exclude
+
+# 조건 3: 점수 평균 2.5~3.5 제외 (경계 애매한 결절)
+if 2.5 <= mean(scores) <= 3.5: exclude
+```
+
+### 필터링 결과
+
+| 단계 | 수량 |
+|------|------|
+| 전체 XML | 1318개 |
+| 추출된 유효 결절 | 515개 |
+| metadata uid 매칭 | 515/515 (100%) |
+| 최종 저장된 ROI | 494개 (21개 경계 외 제외) |
+
+### 최종 데이터 분포
+
+| 분할 | 양성(0) | 악성(1) | 합계 |
+|------|---------|---------|------|
+| train | - | - | 352 |
+| val | - | - | 70 |
+| test | - | - | 72 |
+| **전체** | **199** | **295** | **494** |
+
+---
+
+## 3단계: 전처리 파이프라인 (prepare_3d.py)
+
+```
+원본 DICOM (.dcm 수백 장)
+      ↓  SimpleITK로 읽기
+3D 볼륨 합치기 (512×512×240)
+      ↓  resample_to_1mm()
+1×1×1mm 리샘플링 (300×300×300)
+      ↓  extract_roi_v2()
+결절 중심 기준 ±32 voxel 큐브 추출 (64×64×64)
+      ↓  HU 클리핑(-1000~400) + 정규화(0~1)
+npy 파일 저장
+      ↓
+labels_3d.csv 생성 (환자 단위 train/val/test 분할)
+```
+
+### 좌표 변환 방법
+```python
+# XML의 cx, cy는 픽셀 좌표 → world 좌표(mm)로 변환
+cx_mm = orig_origin[0] + cx_pix * orig_spacing[0]
+cy_mm = orig_origin[1] + cy_pix * orig_spacing[1]
+# cz는 이미 mm 단위
+voxel = resampled_image.TransformPhysicalPointToIndex((cx_mm, cy_mm, cz_mm))
+```
+
+---
+
+## 4단계: 3D ResNet 모델 (model.py)
+
+### 구조
+
+```
+입력: (B, 1, 64, 64, 64)
+  ↓ Conv3D 7×7×7, stride=2
+  ↓ MaxPool3D
+  ↓ Layer1: BasicBlock3D × 2 (64ch)
+  ↓ Layer2: BasicBlock3D × 2 (128ch, stride=2)
+  ↓ Layer3: BasicBlock3D × 2 (256ch, stride=2)
+  ↓ Layer4: BasicBlock3D × 2 (512ch, stride=2)
+  ↓ AdaptiveAvgPool3D
+  ↓ FC(512 → 2)
+출력: (B, 2)  ← 양성/악성
+```
 
 | 항목 | 값 |
 |------|-----|
-| 총 슬라이스 | 7,849개 NPY |
-| 환자 수 | 889명 |
-| 이미지 크기 | 300 × 300 px |
-| dtype | int32 (HU 값) |
-| HU 범위 | -3024 ~ 1403 |
-| 파일명 규칙 | `slice_{z_idx}_{malignancy_score}.npy` |
-
-### 2.2 라벨링 전략 (전략 A — 2클래스)
-
-| 클래스 | Score 범위 | 의미 |
-|--------|-----------|------|
-| 0 (양성) | 1 ~ 3 | 양성 또는 불확실 |
-| 1 (악성) | 4 ~ 5 | 악성 |
-
-### 2.3 환자 단위 분할
-
-| Split | 환자 수 | 슬라이스 수 | 양성 비율 | 악성 비율 |
-|-------|--------|-----------|----------|----------|
-| Train | 623명  | 5,530개   | 54.4%   | 45.6%   |
-| Val   | 133명  | 1,111개   | 58.4%   | 41.6%   |
-| Test  | 133명  | 1,208개   | 53.1%   | 46.9%   |
-
-Data leakage 검증 (3-way assert): **통과 ✓**
+| 파라미터 수 | 33,161,026 |
+| 입력 채널 | 1 (grayscale CT) |
+| 출력 클래스 | 2 (양성/악성) |
+| A팀과 차이 | Conv2D → Conv3D, 2D→3D 전체 구조 |
 
 ---
 
-## 3. 실험 결과 비교
+## 5단계: 학습 결과 (train_3d.py)
 
-### 3.1 성능 추이
+### 학습 설정
 
-| 실험 | 설정 | Val AUC (best) | Test AUC | Test Acc |
-|------|------|:--------------:|:--------:|:--------:|
-| Exp 1 — 베이스라인 | EfficientNetV2-S, 전체 슬라이스 300×300, 50 epoch | 0.660 | 0.660 | 63% |
-| Exp 2 — CBAM 추가 | + CBAM (features[6,7]), 50 epoch | 0.661 | 0.652 | 61% |
-| Exp 3 — ROI 크롭 (center) | + CBAM + 128×128 center crop, 50 epoch | **0.772** | **0.790** | **74%** |
+| 항목 | 값 |
+|------|-----|
+| Optimizer | SGD (momentum=0.9, weight_decay=1e-4) |
+| Scheduler | CosineAnnealingLR |
+| Loss | CrossEntropyLoss |
+| Epochs | 50 |
+| Batch size | 8 |
+| LR | 0.01 |
+| 데이터 증강 | 3축 랜덤 Flip, 90도 회전 |
+| 클래스 불균형 처리 | WeightedRandomSampler |
 
-> Exp 3은 `labels.csv`에 cx/cy가 없어 이미지 중심 크롭으로 동작함 (nodule centroid 미적용)
+### Epoch별 주요 결과
 
-### 3.2 목표 대비 현황
+| Epoch | Val Acc | Val AUC |
+|-------|---------|---------|
+| 1 | 0.3571 | 0.7493 |
+| 10 | 0.8286 | 0.9156 |
+| 20 | 0.8571 | 0.9271 |
+| 36 | 0.9143 | 0.9520 ← best |
+| 50 | 0.8714 | 0.9404 |
 
-| 팀/연구 | 모델 | Accuracy | AUC |
-|---------|------|:--------:|:---:|
-| **현재 (Exp 3)** | EfficientNetV2-S + CBAM + center crop | 74.17% | 0.790 |
-| MT-Swin (논문) | Multi-task Swin | 93.74% | 0.985 |
-| ProCAN (논문) | Progressive Channel Attention | 95.28% | 0.980 |
-| C조 (최고) | EfficientNetV2-L + SAM | 96.54% | 0.987 |
-| **목표** | — | **>96.54%** | **>0.987** |
+### 최종 Test 결과 (베이스라인 v1)
 
----
+| 지표 | 값 |
+|------|-----|
+| Accuracy | 0.7222 |
+| **AUC** | **0.8909** |
+| Sensitivity (악성 탐지율) | 0.9706 |
+| Specificity (양성 탐지율) | 0.5000 |
+| F1-score | 0.7674 |
 
-## 4. 실험별 분석
-
-### 4.1 Exp 1 — 베이스라인 (전체 슬라이스)
-
-**핵심 문제:** Train Acc 91% vs Val Acc 63% — 심각한 과적합
-
-**원인 분석:**
-- 전체 CT 단면 300×300 입력 시 결절 면적 비율 **< 1%**
-- 결절 크기: 3~30mm → 3~30px (at 1.0mm/px)
-- 모델이 결절 특성이 아닌 폐 전체 배경 패턴을 학습
-
-```
-이미지 중 결절 면적:
-  결절 지름 30px → 면적 ≈ 707px²
-  전체 이미지   → 면적 = 90,000px²
-  비율          → 약 0.8%
-```
-
-### 4.2 Exp 2 — CBAM 추가
-
-**결과:** 성능 변화 없음 (Test AUC 0.652, 베이스라인과 동등)
-
-**원인 분석:**
-- CBAM은 어텐션 가중치를 학습하지만, 결절이 feature map에서 극히 작은 영역을 차지
-- 어텐션 메커니즘이 효과를 발휘하려면 먼저 ROI 국소화가 선행되어야 함
-- CBAM 단독으로는 결절 위치 학습 불가
-
-### 4.3 Exp 3 — ROI 크롭 128×128 (center crop)
-
-**결과:** Test AUC 0.790 (+0.138), Accuracy 74.17% (+13.1%)
-
-**효과 분석:**
-- 300×300 → 128×128 크롭 → 224×224 리사이즈
-- 유효 해상도 1.75× 향상 (0.75px/mm → 1.75px/mm)
-- 불필요한 배경(폐 벽, 흉곽) 제거로 노이즈 감소
-- center crop이었음에도 개선: 크롭 자체의 효과 확인
-
-**한계:**
-- 실제 nodule centroid가 아닌 이미지 중심(150, 150) 사용
-- 결절은 대부분 폐 실질(periphery)에 위치 → center crop이 결절을 빗나갈 수 있음
-- nodule_malignancy_scores.json 기반 centroid 적용 시 추가 개선 예상
+### 분석
+- AUC 0.89는 괜찮은 수준
+- Sensitivity 0.97 → 악성 결절을 거의 다 잡아냄
+- Specificity 0.50 → 양성을 절반밖에 못 맞힘 → 모델이 악성 쪽으로 치우침
+- 원인: 데이터 부족(494개), 클래스 불균형(양성199 vs 악성295)
 
 ---
 
-## 5. 현재 코드 구조
+## 다음 단계 (개선 계획)
 
-```
-project/
-  prepare_csv.py        # slices/ 스캔 + JSON centroid 추출 → labels.csv 생성
-                        # 출력 컬럼: patient_id, image_path, label, split, cx, cy
-  train_baseline.py     # 전체 파이프라인 (Dataset·DataLoader·모델·학습·평가)
-  1/
-    eda_report.md       # EDA 결과
-    baseline_report.md  # 1차 베이스라인 보고서
-    progress_report.md  # 이 파일 (1주차 종합)
-```
+### 즉시 적용 가능
+- [ ] CrossEntropyLoss에 class weight 적용 → Specificity 개선
+- [ ] Epoch 늘리기 (50 → 100)
+- [ ] 데이터 증강 강화
 
-### 주요 파라미터
-
-```bash
-# 현재 best 설정
-python train_baseline.py \
-  --arch efficientnet_v2_s \
-  --cbam \
-  --crop_size 128 \
-  --epochs 50 \
-  --lr 0.001 \
-  --batch 32
-```
-
-### 입력 파이프라인
-
-```
-NPY (HU int32)
-  → clip[-1000, 400] → (x + 1000) / 1400  # [0, 1] 정규화
-  → ROI 크롭 128×128 (cx, cy 기준, fallback: 이미지 중심)
-  → 3채널 복제 (H, W, 3)
-  → Resize(224×224) → Normalize([0.5]*3, [0.5]*3)
-  → RandomErasing(p=0.2)  [train only]
+### 코드 수정 내용
+```python
+# train_3d.py에서 수정
+class_counts = np.bincount(df[df['split']=='train']['label'].values)
+class_weights = torch.tensor(1.0 / class_counts, dtype=torch.float).to(device)
+criterion = nn.CrossEntropyLoss(weight=class_weights)
 ```
 
 ---
 
-## 6. 다음 단계
+## 파일 목록
 
-### 즉시 실행 (Val AUC 0.93 목표)
-
-1. **nodule centroid 크롭 적용**
-   ```bash
-   python prepare_csv.py --json_path /home/kms/resnet_project/lidc-idri/nodule_malignancy_scores.json
-   python train_baseline.py --cbam --crop_size 128 --epochs 50
-   ```
-   - 예상 효과: AUC +0.03~0.05
-
-2. **에폭 증가 + crop_size 조정**
-   ```bash
-   python train_baseline.py --cbam --crop_size 96 --epochs 100
-   ```
-   - 64px (결절 집중), 96px, 128px 비교 실험
-
-3. **옵티마이저 변경 (AdamW)**
-   - SGD → AdamW(lr=1e-4, weight_decay=1e-2)
-   - 예상 효과: 수렴 속도 향상
-
-### Val AUC ≥ 0.93 달성 후 (/lidc-experiment)
-
-| 기법 | 기대 효과 |
-|------|----------|
-| SAM (Segment Anything) | 결절 영역 정밀 마스킹 → C조 96.54% 핵심 요소 |
-| CAM-Align | Class Activation Map 기반 크롭 정렬 |
-| Multi-scale ensemble | 64/128/192px 크롭 앙상블 |
-| Test Time Augmentation | flip/rotate 예측 평균 |
+| 파일 | 역할 |
+|------|------|
+| `data_explore.ipynb` | EDA, 데이터 구조 파악, 파이프라인 검증 |
+| `project/prepare_csv.py` | 2D labels.csv 생성 |
+| `project/prepare_3d.py` | 3D ROI 추출 + labels_3d.csv 생성 |
+| `project/model.py` | 3D ResNet 모델 정의 |
+| `project/train_3d.py` | 3D 모델 학습 + 평가 |
 
 ---
 
-## 7. 단계별 성능 로드맵
+## GitHub 커밋 히스토리
 
-```
-현재: AUC 0.790 (74%)
-  ↓ nodule centroid 크롭
-예상: AUC ~0.83
-  ↓ 하이퍼파라미터 튜닝
-예상: AUC ~0.90
-  ↓ /lidc-experiment (SAM, CAM-Align)
-목표: AUC > 0.987 (96.54%)
-```
+| 커밋 | 내용 |
+|------|------|
+| `bb5667e` | EDA 및 데이터 파이프라인 검증 완료 |
+| `a13b1ef` | prepare_3d.py: ROI 추출 + labels_3d.csv 생성 |
+| 미커밋 | model.py, train_3d.py |
+
+---
+
+*작성일: 2026-05-08*
