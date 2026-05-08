@@ -15,15 +15,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import roc_auc_score, classification_report
 
 from monai.networks.nets import DenseNet121
-from monai.transforms import (
-    Compose,
-    RandFlipd,
-    RandRotate90d,
-    RandGaussianNoised,
-    RandZoomd,
-    NormalizeIntensityd,
-    ToTensord,
-)
+
 
 # ── 설정 ───────────────────────────────────────────
 CSV_PATH = '/home/kms/resnet_project/lidc-idri/labels_3d.csv'
@@ -37,53 +29,40 @@ os.makedirs(OUT_DIR, exist_ok=True)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
-# ── MONAI Transform 정의 ────────────────────────────
-train_transforms = Compose([
-    RandFlipd(keys=['image'], prob=0.5, spatial_axis=0),
-    RandFlipd(keys=['image'], prob=0.5, spatial_axis=1),
-    RandFlipd(keys=['image'], prob=0.5, spatial_axis=2),
-    RandRotate90d(keys=['image'], prob=0.5, spatial_axes=(1, 2)),
-    RandGaussianNoised(keys=['image'], prob=0.3, std=0.01),
-    RandZoomd(keys=['image'], prob=0.3, min_zoom=0.9, max_zoom=1.1),
-    NormalizeIntensityd(keys=['image']),
-    ToTensord(keys=['image']),
-])
 
-val_transforms = Compose([
-    NormalizeIntensityd(keys=['image']),
-    ToTensord(keys=['image']),
-])
 
 # ── Dataset ────────────────────────────────────────
 class NoduleDataset(Dataset):
-    def __init__(self, df, split, transforms=None):
-        self.data       = df[df['split'] == split].reset_index(drop=True)
-        self.transforms = transforms
+    def __init__(self, df, split, augment=False):
+        self.data    = df[df['split'] == split].reset_index(drop=True)
+        self.augment = augment
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
-        vol = np.load(row['image_path']).astype(np.float32)  # (64,64,64)
-        vol = vol[np.newaxis]  # (1, 64, 64, 64)
+        vol = np.load(row['image_path']).astype(np.float32)
 
-        data = {'image': vol}
-        if self.transforms:
-            data = self.transforms(data)
+        if self.augment:
+            if np.random.rand() > 0.5:
+                vol = np.flip(vol, axis=0).copy()
+            if np.random.rand() > 0.5:
+                vol = np.flip(vol, axis=1).copy()
+            if np.random.rand() > 0.5:
+                vol = np.flip(vol, axis=2).copy()
+            k = np.random.randint(0, 4)
+            vol = np.rot90(vol, k=k, axes=(1, 2)).copy()
 
-        image = data['image']
-        if not isinstance(image, torch.Tensor):
-            image = torch.tensor(image)
-
+        vol   = torch.tensor(vol).unsqueeze(0)
         label = torch.tensor(int(row['label']), dtype=torch.long)
-        return image, label
+        return vol, label
 
 # ── DataLoader ─────────────────────────────────────
 df = pd.read_csv(CSV_PATH)
-train_ds = NoduleDataset(df, 'train', train_transforms)
-val_ds   = NoduleDataset(df, 'val',   val_transforms)
-test_ds  = NoduleDataset(df, 'test',  val_transforms)
+train_ds = NoduleDataset(df, 'train', augment=True)
+val_ds   = NoduleDataset(df, 'val',   augment=False)
+test_ds  = NoduleDataset(df, 'test',  augment=False)
 
 labels       = train_ds.data['label'].values
 class_counts = np.bincount(labels)
@@ -163,3 +142,47 @@ for epoch in range(1, EPOCHS + 1):
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * len(labels)
+
+        correct += (logits.argmax(1) == labels).sum().item()
+        total += len(labels)
+
+    train_loss = total_loss / total
+    train_acc = correct / total
+    val_metrics = evaluate(model, val_loader, device)
+    scheduler.step()
+
+    history['train_loss'].append(train_loss)
+    history['train_acc'].append(train_acc)
+    history['val_acc'].append(val_metrics['accuracy'])
+    history['val_auc'].append(val_metrics['auc'])
+
+    flag = ''
+    if val_metrics['auc'] > best_auc:
+        best_auc = val_metrics['auc']
+        torch.save(model.state_dict(), f'{OUT_DIR}/best_model_monai.pth')
+        flag = ' ← best'
+
+    print(f'Epoch {epoch:3d}/{EPOCHS} | '
+          f'Loss: {train_loss:.4f} | '
+          f'Train Acc: {train_acc * 100:.2f}% | '
+          f'Val Acc: {val_metrics["accuracy"] * 100:.2f}% | '
+          f'Val AUC: {val_metrics["auc"] * 100:.2f}%{flag}')
+
+with open(f'{OUT_DIR}/history.json', 'w') as f:
+    json.dump(history, f, indent=2)
+
+print('\n' + '=' * 50)
+model.load_state_dict(torch.load(f'{OUT_DIR}/best_model_monai.pth',
+                                 map_location=device, weights_only=True))
+test_metrics = evaluate(model, test_loader, device)
+print('[ Test 최종 결과 ]')
+print(f'  Accuracy   : {test_metrics["accuracy"]*100:.2f}%')
+print(f'  AUC        : {test_metrics["auc"]*100:.2f}%')
+print(f'  Sensitivity: {test_metrics["sensitivity"]*100:.2f}%')
+print(f'  Specificity: {test_metrics["specificity"]*100:.2f}%')
+print(f'  F1         : {test_metrics["f1"]*100:.2f}%')
+print('=' * 50)
+
+with open(f'{OUT_DIR}/test_results.json', 'w') as f:
+    json.dump(test_metrics, f, indent=2)
+print(f'결과 저장: {OUT_DIR}/test_results.json')
