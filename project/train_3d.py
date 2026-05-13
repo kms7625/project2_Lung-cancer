@@ -115,12 +115,7 @@ print(f'Device: {device}')
 model     = ResNet3D(num_classes=2).to(device)
 optimizer = SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)
 scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
-# criterion = nn.CrossEntropyLoss()
-# 양성(0) 클래스가 적어서 모델이 악성으로 치우치는 문제를 해결
-# 클래스 수에 반비례한 weight를 Loss에 적용해 균형맞춤
-class_counts = np.bincount(df[df['split']=='train']['label'].values)
-class_weights = torch.tensor(1.0 / class_counts, dtype=torch.float).to(device)
-criterion = nn.CrossEntropyLoss(weight=class_weights)
+criterion = nn.CrossEntropyLoss()
 
 best_auc = 0.0
 history  = {'train_loss': [], 'train_acc': [], 'val_acc': [], 'val_auc': []}
