@@ -17,11 +17,12 @@ from sklearn.metrics import roc_auc_score, classification_report
 import sys
 sys.path.append('/home/kms/resnet_project')
 from model import ResNet3D
+from torch.optim import Adam
 
 # ── 설정 ───────────────────────────────────────────
 CSV_PATH  = '/home/kms/resnet_project/lidc-idri/labels_3d.csv'
 OUT_DIR   = '/home/kms/resnet_project/lidc-idri/checkpoints/3d_resnet'
-EPOCHS    = 50
+EPOCHS    = 100
 BATCH     = 8   # 3D라서 메모리 많이 써서 작게 설정
 LR        = 0.01
 SEED      = 42
@@ -113,7 +114,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Device: {device}')
 
 model     = ResNet3D(num_classes=2).to(device)
-optimizer = SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)
+#optimizer = SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)
+optimizer = Adam(model.parameters(), lr=LR, weight_decay=1e-4)
 scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
 criterion = nn.CrossEntropyLoss()
 
