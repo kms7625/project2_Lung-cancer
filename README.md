@@ -75,7 +75,7 @@ LIDC-IDRI CT 데이터셋을 이용한 폐 결절 이진 분류 프로젝트.
 
 ---
 
-## 코드 구조
+## 코드 구조.
 
 ```
 project2_Lung-cancer/
