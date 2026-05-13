@@ -1,7 +1,11 @@
-# LIDC-IDRI 폐 결절 악성/양성 분류
+## 🫁 LIDC-IDRI 폐 결절 악성/양성 분류
 
-LIDC-IDRI CT 데이터셋을 이용한 폐 결절 이진 분류 프로젝트.  
-**목표: Accuracy > 96.54%, AUC > 0.987** (C조 최고 성능 상회)
+![Python](https://img.shields.io/badge/Python-3.8+-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red)
+![MONAI](https://img.shields.io/badge/MONAI-1.0+-green)
+
+LIDC-IDRI CT 데이터셋을 이용한 폐 결절 이진 분류 프로젝트.
+3D ResNet-18 기반 모델로 AUC 0.899 달성.
 
 ---
 
