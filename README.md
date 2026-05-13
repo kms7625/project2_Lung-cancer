@@ -105,7 +105,7 @@ project2_Lung-cancer/
 
 ```bash
 # 서버 접속
-ssh kms@192.168.3.19
+ssh 사용자@서버
 
 # 코드 최신화
 cd ~/project2_Lung-cancer && git pull origin main
